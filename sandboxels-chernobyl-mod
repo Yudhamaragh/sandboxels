@@ -1,0 +1,167 @@
+// === CHERNOBYL REACTOR MOD v6 ===
+// Simulates fuel rods, graphite moderation, and a steam pressure explosion inside the reactor
+
+// --- FUEL ROD ---
+elements.fuel_rod = {
+    color: "#999900",
+    behavior: behaviors.WALL,
+    category: "nuclear",
+    density: 8000,
+    tempHigh: 2500,
+    stateHigh: "melted_core",
+    tick: function(pixel) {
+        // self-heating uranium
+        if (!pixel.heatLevel) pixel.heatLevel = 0;
+        pixel.heatLevel += 0.15;
+
+        // graphite moderates (accelerates heat)
+        for (let dx = -1; dx <= 1; dx++) {
+            for (let dy = -1; dy <= 1; dy++) {
+                const nx = pixel.x + dx;
+                const ny = pixel.y + dy;
+                const neighbor = pixelMap[nx]?.[ny];
+                if (neighbor && neighbor.element === "graphite") {
+                    pixel.heatLevel += 0.4;
+                }
+            }
+        }
+
+        pixel.temp += pixel.heatLevel * 0.3;
+
+        // chain reaction spread
+        if (pixel.temp > 1600 && !pixel.chainReaction) {
+            pixel.chainReaction = true;
+            for (let dx = -3; dx <= 3; dx++) {
+                for (let dy = -3; dy <= 3; dy++) {
+                    const nx = pixel.x + dx;
+                    const ny = pixel.y + dy;
+                    const neighbor = pixelMap[nx]?.[ny];
+                    if (neighbor && neighbor.element === "fuel_rod") {
+                        neighbor.temp += 300;
+                    }
+                }
+            }
+        }
+    }
+};
+
+// --- REACTOR STRUCTURE ---
+elements.chernobyl_reactor = {
+    color: "#555555",
+    behavior: behaviors.WALL,
+    category: "special",
+    density: 7000,
+    tempHigh: 2500,
+    stateHigh: "melted_core",
+    tick: function(pixel) {
+        if (!pixel.steamPressure) pixel.steamPressure = 0;
+
+        // collect steam inside reactor (pressure buildup)
+        for (let dx = -2; dx <= 2; dx++) {
+            for (let dy = -2; dy <= 2; dy++) {
+                const nx = pixel.x + dx;
+                const ny = pixel.y + dy;
+                const neighbor = pixelMap[nx]?.[ny];
+                if (neighbor && neighbor.element === "steam") {
+                    // steam inside adds pressure
+                    deletePixel(nx, ny);
+                    pixel.steamPressure += 1;
+                } else if (neighbor && neighbor.element === "water" && pixel.temp > 500) {
+                    // heat nearby water into steam
+                    changePixel(neighbor, "steam");
+                    pixel.steamPressure += 0.5;
+                }
+            }
+        }
+
+        // gradually release small amounts of steam (safety vent)
+        if (pixel.steamPressure > 0 && Math.random() < 0.02) {
+            pixel.steamPressure -= 0.5;
+        }
+
+        // when pressure too high — explosion (contained)
+        if (pixel.steamPressure > 50 && !pixel.exploded) {
+            pixel.exploded = true;
+
+            // eject graphite upward (reactor lid blow-off effect)
+            for (let i = 0; i < 80; i++) {
+                const x = pixel.x + Math.floor(Math.random() * 5 - 2);
+                const y = pixel.y - Math.floor(Math.random() * 5);
+                if (isEmpty(x, y, true)) {
+                    createPixel("graphite", x, y);
+                }
+            }
+
+            // internal shockwave (contained inside structure)
+            for (let dx = -4; dx <= 4; dx++) {
+                for (let dy = -4; dy <= 4; dy++) {
+                    const nx = pixel.x + dx;
+                    const ny = pixel.y + dy;
+                    const neighbor = pixelMap[nx]?.[ny];
+                    if (neighbor && (neighbor.element === "chernobyl_reactor" || neighbor.element === "fuel_rod")) {
+                        neighbor.temp += 600;
+                    }
+                }
+            }
+
+            pixel.steamPressure = 0; // release pressure
+        }
+
+        // normal heat transfer from fuel rods
+        for (let dx = -2; dx <= 2; dx++) {
+            for (let dy = -2; dy <= 2; dy++) {
+                const nx = pixel.x + dx;
+                const ny = pixel.y + dy;
+                const neighbor = pixelMap[nx]?.[ny];
+                if (neighbor && neighbor.element === "fuel_rod") {
+                    pixel.temp += (neighbor.temp - pixel.temp) * 0.02;
+                }
+            }
+        }
+    }
+};
+
+// --- MELTED CORE (POST-EXPLOSION) ---
+elements.melted_core = {
+    color: "#ff6600",
+    behavior: [
+        "XX|CR:radiation|XX",
+        "CR:radiation|DL%5|CR:radiation",
+        "XX|CR:radiation|XX"
+    ],
+    category: "special",
+    state: "liquid",
+    density: 8500,
+    tick: function(pixel) {
+        // water + heat -> hydrogen
+        for (let dx = -1; dx <= 1; dx++) {
+            for (let dy = -1; dy <= 1; dy++) {
+                const nx = pixel.x + dx;
+                const ny = pixel.y + dy;
+                const neighbor = pixelMap[nx]?.[ny];
+                if (neighbor && neighbor.element === "water") {
+                    changePixel(neighbor, "hydrogen");
+                }
+            }
+        }
+    }
+};
+
+// --- RADIATION ---
+elements.radiation = {
+    color: "#00ff00",
+    behavior: [
+        "XX|CR:radiation|XX",
+        "CR:radiation|DL%5|CR:radiation",
+        "XX|CR:radiation|XX"
+    ],
+    category: "energy",
+    density: 0.5,
+    temp: 400,
+    tick: function(pixel) {
+        if (!pixel.life) pixel.life = 150 + Math.random() * 100;
+        pixel.life--;
+        if (pixel.life <= 0) deletePixel(pixel.x, pixel.y);
+    }
+};
+
